@@ -234,6 +234,50 @@ class SoftmaxWithCrossEntropyLoss(Layer):
         """
         # Gradient of cross-entropy loss with softmax
         return (self.probs - self.labels) / self.labels.shape[0]
+
+
+class BatchNormalization(Layer):
+    def __init__(self, name, feature_num, epsilon=1e-5, requires_grad=True):
+        super().__init__(name)
+        self.epsilon = epsilon
+        self.gamma = Parameter(np.ones(feature_num), requires_grad=requires_grad, skip_decay=True)
+        self.beta = Parameter(np.zeros(feature_num), requires_grad=requires_grad, skip_decay=True)
+        self.ema = Parameter(np.zeros(feature_num), requires_grad=False)
+        self.emv = Parameter(np.zeros(feature_num), requires_grad=False)
+
+    def _forward(self, x: np.ndarray) -> np.ndarray:
+        '''
+        x: [batch_size,feature number]
+        gamma: [feature number]
+        beta: [feature number]
+        :param x:
+        :return:
+        '''
+        if self.train:
+            batch_mean = x.mean(axis=0)
+            batch_variance = x.var(axis=0)
+            batch_std = np.sqrt(batch_variance + self.epsilon)
+            # record exponential moving average and variance to
+            momentum = 0.9
+            self.ema.data = momentum * self.ema.data + (1 - momentum) * batch_mean
+            self.emv.data = momentum * self.emv.data + (1 - momentum) * batch_variance
+        else:
+            batch_mean = self.ema.data
+            batch_std = np.sqrt(self.emv.data + self.epsilon)
+        self.norm = (x - batch_mean) / batch_std
+        self.gamma_norm = self.gamma.data / batch_std
+
+        return self.gamma.data * self.norm + self.beta.data
+
+    def _backward(self, gradient_output: np.ndarray) -> np.ndarray:
+        # make sure that gradient_output is the gradient of next layer, indicating that the gradient of loss about y
+        batch_size = gradient_output.shape[0]
+        self.gamma.grad = (gradient_output * self.norm).sum(axis=0) / batch_size
+        self.beta.grad = gradient_output.sum(axis=0) / batch_size
+        dLdx = self.gamma_norm * (gradient_output - self.norm * self.gamma.grad - self.beta.grad)
+        return dLdx
+
+
 class Softmax(Layer):
     def __init__(self,name,requires_grad=False):
         super().__init__(name,requires_grad)
