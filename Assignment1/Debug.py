@@ -401,6 +401,43 @@ class MLP_V2():
             for layer in self.layers:
                 layer.train=False
 
+
+class AdamW(object):
+    '''
+    the parameters has all the layers W and b
+    '''
+
+    def __init__(self, parameters, lr=1e-3, decoupled_weight_decay=0, beta1=0.9, beta2=0.999, epsilon=1e-8):
+        self.parameters = parameters
+        self.lr = lr
+        self.beta1 = beta1
+        self.beta2 = beta2
+        self.decoupled_weight_decay = decoupled_weight_decay
+        self.epsilon = epsilon
+        self.t = 0
+        self.m = [np.zeros(p.data.shape) for p in self.parameters]
+        self.v = [np.zeros(p.data.shape) for p in self.parameters]
+
+    def step(self):
+        for i, (param, m, v) in enumerate(zip(self.parameters, self.m, self.v)):
+            self.t += 1
+            m = self.beta1 * m + (1 - self.beta1) * param.grad
+            v = self.beta2 * v + (1 - self.beta2) * np.power(param.grad, 2)
+
+            self.m[i] = m
+            self.v[i] = v
+
+            m_hat = m / (1 - np.power(self.beta1, self.t))
+            v_hat = v / (1 - np.power(self.beta2, self.t))
+            update = self.lr * m_hat / (np.sqrt(v_hat) + self.epsilon)
+            if hasattr(param, 'skip_decay') and param.skip_decay:
+                param.data -= update
+            else:
+                param.data -= update
+
+                param.data *= (1 - self.lr * self.decoupled_weight_decay)
+
+
 class SGDMomentum(object):
     def __init__(self,parameters,lr=0.01,momentum=0.9,weight_decay=0.0001):
         self.parameters = parameters
@@ -478,8 +515,8 @@ class Trainer(object):
         if self.config['optimizer'] == 'sgd':
             self.optimizer = SGDMomentum(self.model.params, self.lr, self.config['momentum'],
                                          self.config['weight_decay'])
-        # elif self.config['optimizer'] == 'adam':
-        #     self.optimizer = Adam(self.model.params, self.lr, self.config['weight_decay'])
+        elif self.config['optimizer'] == 'adamw':
+            self.optimizer = AdamW(self.model.params, self.lr, self.config['weight_decay'])
         # if self.scheduler == 'cos':
         #     self.train_scheduler = CosineLR(self.optimizer, T_max=self.epochs)
 
@@ -614,17 +651,9 @@ def build_model(layers):
     return model
 
 
-layers=[
-    {'type': 'linear','params':{'name':'fc1','n_in':128,'n_out':256}},
-    {'type': 'dropout', 'params': {'name': 'dropout1', 'drop_rate': 0.3}},
-    {'type':'relu', 'params': {'name': 'relu1'}},
-    {'type':'linear', 'params': {'name': 'fc2', 'n_in':256,'n_out':128}},
-    {'type': 'dropout', 'params': {'name': 'dropout2', 'drop_rate': 0.3}},
-    {'type': 'relu', 'params': {'name': 'relu2'}},
-    {'type': 'linear', 'params': {'name': 'fc3', 'n_in': 128, 'n_out': 10}},
-]
+
 batch_size=1024
-config={'layers': layers,'lr': 0.1,'batch_size': batch_size,'momentum': 0.9,'weight_decay': 5e-4,'seed': 0,'epoch': 200,
+config={'lr': 0.1,'batch_size': batch_size,'momentum': 0.9,'weight_decay': 5e-4,'seed': 0,'epoch': 200,
     'optimizer': 'sgd',     # adam, sgd
     'scheduler': None,      # cos, None
     'pre-process': 'standardization',      # min-max, standardization, None
